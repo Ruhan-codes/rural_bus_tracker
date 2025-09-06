@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Driver • Share Location</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+
+  <!-- Firebase (compat builds for simplicity) -->
+  <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-database-compat.js"></script>
+
+  <!-- Your Firebase config (copy config.example.js to config.js and fill it) -->
+  <script src="./config.js"></script>
+
+  <style>
+    body { font-family: system-ui, Arial, sans-serif; margin: 0; }
+    header { padding: 12px 16px; background: #0ea5e9; color: white; }
+    main { padding: 16px; max-width: 720px; margin: auto; }
+    #map { height: 45vh; border-radius: 12px; }
+    .row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin: 12px 0; }
+    button { padding: 10px 14px; border: 0; border-radius: 10px; cursor: pointer; }
+    #start { background: #16a34a; color: white; }
+    #stop { background: #ef4444; color: white; }
+    .card { background: #f1f5f9; border-radius: 12px; padding: 12px; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .hint { color: #334155; font-size: 14px; }
+  </style>
+</head>
+<body>
+  <header>
+    <strong>Driver</strong> — Share live location to Firebase
+  </header>
+  <main>
+    <div class="row">
+      <div><strong>Bus ID:</strong> <span id="busIdDisplay" class="mono"></span></div>
+      <button id="start">Start Sharing</button>
+      <button id="stop" disabled>Stop Sharing</button>
+    </div>
+    <div id="map"></div>
+    <div class="card" style="margin-top:12px">
+      <div><strong>Status:</strong> <span id="status">Idle</span></div>
+      <div><strong>Lat, Lng:</strong> <span id="latlng" class="mono">-</span></div>
+      <div><strong>Accuracy:</strong> <span id="acc" class="mono">-</span></div>
+      <div><strong>Speed (m/s):</strong> <span id="spd" class="mono">-</span></div>
+      <div><strong>Heading (°):</strong> <span id="hdg" class="mono">-</span></div>
+      <div><strong>Last update:</strong> <span id="time" class="mono">-</span></div>
+      <p class="hint">Keep this page open. Turn screen on to avoid OS pausing GPS.</p>
+    </div>
+  </main>
+
+  <script>
+    // --- Utils ---
+    function getQueryParam(name, fallback) {
+      const url = new URL(window.location.href);
+      return url.searchParams.get(name) || fallback;
+    }
+    const busId = getQueryParam("busId", "demo");
+    document.getElementById("busIdDisplay").textContent = busId;
+
+    // --- Firebase ---
+    if (typeof firebaseConfig === "undefined") {
+      alert("Missing config.js! Copy config.example.js to config.js and paste your Firebase config.");
+    }
+    firebase.initializeApp(firebaseConfig);
+    const db = firebase.database();
+    const busRef = db.ref("bus/" + busId);
+
+    // --- Map ---
+    const map = L.map("map").setView([20.5937, 78.9629], 5);
+    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+      attribution: "&copy; OpenStreetMap contributors"
+    }).addTo(map);
+    const marker = L.marker([20.5937, 78.9629]).addTo(map).bindPopup("You (driver)");
+    const accuracyCircle = L.circle([20.5937, 78.9629], { radius: 0 }).addTo(map);
+
+    // --- Geolocation ---
+    let watchId = null;
+    const startBtn = document.getElementById("start");
+    const stopBtn = document.getElementById("stop");
+    const statusEl = document.getElementById("status");
+    const latlngEl = document.getElementById("latlng");
+    const accEl = document.getElementById("acc");
+    const spdEl = document.getElementById("spd");
+    const hdgEl = document.getElementById("hdg");
+    const timeEl = document.getElementById("time");
+
+    function fmtTime(ts) {
+      const d = new Date(ts);
+      return d.toLocaleString();
+    }
+
+    function onPosition(pos) {
+      const { latitude, longitude, accuracy, speed, heading } = pos.coords;
+      const ts = Date.now();
+      // Update UI
+      statusEl.textContent = "Sharing…";
+      latlngEl.textContent = latitude.toFixed(6) + ", " + longitude.toFixed(6);
+      accEl.textContent = (accuracy ?? 0).toFixed(0) + " m";
+      spdEl.textContent = (speed ?? 0).toFixed(1);
+      hdgEl.textContent = (heading ?? 0).toFixed(0);
+      timeEl.textContent = fmtTime(ts);
+
+      // Update map
+      marker.setLatLng([latitude, longitude]);
+      accuracyCircle.setLatLng([latitude, longitude]).setRadius(accuracy || 0);
+      map.setView([latitude, longitude], 16);
+
+      // Write to Firebase
+      busRef.set({
+        lat: latitude,
+        lng: longitude,
+        accuracy: accuracy ?? null,
+        speed: speed ?? null,
+        heading: heading ?? null,
+        updatedAt: ts
+      });
+    }
+
+    function onError(err) {
+      statusEl.textContent = "Error: " + err.message;
+    }
+
+    startBtn.onclick = () => {
+      if (!navigator.geolocation) {
+        alert("Geolocation not supported on this device/browser.");
+        return;
+      }
+      startBtn.disabled = true;
+      stopBtn.disabled = false;
+      statusEl.textContent = "Requesting location permission…";
+      watchId = navigator.geolocation.watchPosition(onPosition, onError, {
+        enableHighAccuracy: true,
+        maximumAge: 2000,
+        timeout: 10000
+      });
+    };
+
+    stopBtn.onclick = () => {
+      if (watchId !== null) {
+        navigator.geolocation.clearWatch(watchId);
+        watchId = null;
+      }
+      startBtn.disabled = false;
+      stopBtn.disabled = true;
+      statusEl.textContent = "Stopped";
+    };
+
+    // Optional: mark offline when leaving
+    window.addEventListener("beforeunload", () => {
+      busRef.update({ offlineAt: Date.now() });
+    });
+  </script>
+</body>
+</html>

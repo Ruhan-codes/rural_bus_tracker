@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Passenger • Track Bus</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+
+  <!-- Firebase (compat builds for simplicity) -->
+  <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-database-compat.js"></script>
+
+  <!-- Your Firebase config (copy config.example.js to config.js and fill it) -->
+  <script src="./config.js"></script>
+
+  <style>
+    body { font-family: system-ui, Arial, sans-serif; margin: 0; }
+    header { padding: 12px 16px; background: #22c55e; color: white; }
+    #map { height: calc(100vh - 56px); }
+    .panel {
+      position: absolute; z-index: 1000; top: 70px; left: 10px;
+      background: rgba(241,245,249,0.96); padding: 10px 12px; border-radius: 10px;
+      box-shadow: 0 4px 10px rgba(0,0,0,0.1);
+    }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  </style>
+</head>
+<body>
+  <header>
+    <strong>Passenger</strong> — Live bus tracking
+  </header>
+
+  <div id="map"></div>
+  <div class="panel">
+    <div><strong>Bus ID:</strong> <span id="busIdDisplay" class="mono"></span></div>
+    <div><strong>Last update:</strong> <span id="lastUpdate">-</span></div>
+    <div><strong>Accuracy:</strong> <span id="acc">-</span></div>
+    <div><strong>Speed (m/s):</strong> <span id="spd">-</span></div>
+  </div>
+
+  <script>
+    // --- Utils ---
+    function getQueryParam(name, fallback) {
+      const url = new URL(window.location.href);
+      return url.searchParams.get(name) || fallback;
+    }
+    function fmtTime(ts) {
+      const d = new Date(ts);
+      return d.toLocaleString();
+    }
+    const busId = getQueryParam("busId", "demo");
+    document.getElementById("busIdDisplay").textContent = busId;
+
+    // --- Firebase ---
+    if (typeof firebaseConfig === "undefined") {
+      alert("Missing config.js! Copy config.example.js to config.js and paste your Firebase config.");
+    }
+    firebase.initializeApp(firebaseConfig);
+    const db = firebase.database();
+    const busRef = db.ref("bus/" + busId);
+
+    // --- Map ---
+    const map = L.map("map").setView([20.5937, 78.9629], 5);
+    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+      attribution: "&copy; OpenStreetMap contributors"
+    }).addTo(map);
+    const marker = L.marker([20.5937, 78.9629]).addTo(map).bindPopup("Bus");
+    const accuracyCircle = L.circle([20.5937, 78.9629], { radius: 0 }).addTo(map);
+
+    let firstFix = true;
+    const lastUpdateEl = document.getElementById("lastUpdate");
+    const accEl = document.getElementById("acc");
+    const spdEl = document.getElementById("spd");
+
+    busRef.on("value", (snap) => {
+      const data = snap.val();
+      if (!data || typeof data.lat !== "number" || typeof data.lng !== "number") return;
+
+      marker.setLatLng([data.lat, data.lng]);
+      accuracyCircle.setLatLng([data.lat, data.lng]).setRadius(data.accuracy || 0);
+      accEl.textContent = (data.accuracy ?? 0).toFixed(0) + " m";
+      spdEl.textContent = (data.speed ?? 0).toFixed(1);
+      if (data.updatedAt) {
+        lastUpdateEl.textContent = fmtTime(data.updatedAt);
+      }
+
+      if (firstFix) {
+        firstFix = false;
+        map.setView([data.lat, data.lng], 15);
+      }
+    });
+  </script>
+</body>
+</html>
